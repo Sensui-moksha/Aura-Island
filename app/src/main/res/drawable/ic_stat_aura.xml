@@ -1,0 +1,30 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+  <!-- Stylized Crystalline Ice Snowflake Status Icon -->
+  <!-- Vertical and Horizontal Main Spikes -->
+  <path
+      android:fillColor="@android:color/white"
+      android:pathData="M11.25,2h1.5v20h-1.5z"/>
+  <path
+      android:fillColor="@android:color/white"
+      android:pathData="M2,11.25h20v1.5H2z"/>
+  <!-- Diagonal Spikes (45 degrees) -->
+  <path
+      android:fillColor="@android:color/white"
+      android:pathData="M4.93,4.93l1.06,-1.06l14.08,14.08l-1.06,1.06z"/>
+  <path
+      android:fillColor="@android:color/white"
+      android:pathData="M19.07,4.93l1.06,1.06l-14.08,14.08l-1.06,-1.06z"/>
+  <!-- Diamond Arrowhead Tips -->
+  <path
+      android:fillColor="@android:color/white"
+      android:pathData="M12,1l2,3.5l-2,-1l-2,1zM12,23l2,-3.5l-2,1l-2,-1zM1,12l3.5,-2l-1,2l1,2zM23,12l-3.5,-2l1,2l-1,2z"/>
+  <!-- Center Core Hexagon / Crystal Hub -->
+  <path
+      android:fillColor="@android:color/white"
+      android:pathData="M12,9.5L14.5,12L12,14.5L9.5,12Z"/>
+</vector>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Aura (2026)
+  Author / Developer: Sensui-moksha
+  https://github.com/Sensui-moksha
+  Licensed under the GNU GPL v3 License
+  Do not remove or alter this notice. - Per GPL-3.0 Section 4 & Section 5
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include
+            domain="sharedpref"
+            path="." />
+    </cloud-backup>
+</data-extraction-rules>

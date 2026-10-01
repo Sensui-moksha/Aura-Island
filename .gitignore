@@ -1,0 +1,54 @@
+# Built application files & packages
+*.apk
+*.apks
+*.aab
+*.apk.idsig
+output.json
+
+# Signing keys, keystores, credentials & sensitive properties
+*.jks
+*.keystore
+*.pem
+*.pk8
+*.key
+*.p12
+*.pfx
+*.crt
+*.der
+*.p7b
+/local.properties
+keystore.properties
+key.properties
+release.properties
+signing.properties
+secrets.properties
+secrets.xml
+google-services.json
+GoogleService-Info.plist
+
+# Markdown documentation exclusion (only README.md is tracked)
+*.md
+*.markdown
+!README.md
+!readme.md
+!README.MD
+
+# Gradle & Build caches
+.gradle/
+/build/
+*/build/
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+*.log
+
+# IDE & OS specific files
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+.navigation/
+.artifacts/
+.fleet/
+.vscode/

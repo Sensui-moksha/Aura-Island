@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Aura (2026)
+  Author / Developer: Sensui-moksha
+  https://github.com/Sensui-moksha
+  Licensed under the GNU GPL v3 License
+  Do not remove or alter this notice. - Per GPL-3.0 Section 4 & Section 5
+-->
+<resources>
+    <style name="Theme.Aura" parent="android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#1B73E8</item>
+    </style>
+</resources>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Aura (2026)
+  Author / Developer: Sensui-moksha
+  https://github.com/Sensui-moksha
+  Licensed under the GNU GPL v3 License
+  Do not remove or alter this notice. - Per GPL-3.0 Section 4 & Section 5
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="false"
+    android:canRequestTouchExplorationMode="false"
+    android:canRequestFilterKeyEvents="false"
+    android:notificationTimeout="200"
+    android:description="@string/accessibility_service_description"
+    android:summary="@string/accessibility_service_description"
+    android:showOnLockScreen="true"
+    android:settingsActivity="com.moksha.auraisland.MainActivity" />
+

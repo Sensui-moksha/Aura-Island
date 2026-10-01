@@ -1,0 +1,424 @@
+/*
+ * Aura (2026)
+ * Author / Developer: Sensui-moksha
+ * https://github.com/Sensui-moksha
+ * Licensed under the GNU GPL v3 License
+ * Do not remove or alter this notice. - Per GPL-3.0 Section 4 & Section 5
+ */
+
+package com.moksha.auraisland.service
+
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothClass
+import android.bluetooth.BluetoothDevice
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.os.Build
+import android.os.PowerManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import com.moksha.auraisland.data.INotificationRepository
+import com.moksha.auraisland.model.IslandMode
+import com.moksha.auraisland.model.IslandNotification
+import com.moksha.auraisland.util.runCatchingLogged
+
+class SystemEventReceiver(
+    private val notificationRepository: INotificationRepository,
+    private val settingsProvider: () -> com.moksha.auraisland.data.AuraSettings = { com.moksha.auraisland.data.AuraSettings.Default },
+    private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+) : BroadcastReceiver() {
+
+    private var lastBatteryPct: Int = -1
+    private var lastBatteryTitle: String? = null
+    private var isCurrentlyCharging: Boolean = false
+    private var nativeChargingYieldJob: Job? = null
+    private var batteryDismissJob: Job? = null
+
+    private var activeBluetoothAddress: String? = null
+    private var lastBluetoothAddress: String? = null
+    private var lastBluetoothConnectedTime: Long = 0L
+
+    companion object {
+        private const val BLUETOOTH_DEBOUNCE_MS = 30_000L
+        private const val NATIVE_CHARGING_POPUP_DURATION_MS = 3500L
+    }
+
+    override fun onReceive(context: Context, intent: Intent) {
+        runCatchingLogged("SystemEventReceiver", "Broadcast callback failed") {
+            when (intent.action) {
+                BluetoothDevice.ACTION_ACL_CONNECTED -> {
+                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    }
+                    val deviceName = try {
+                        device?.name?.takeIf { it.isNotBlank() } ?: "Bluetooth Device"
+                    } catch (e: SecurityException) {
+                        "Bluetooth Device"
+                    }
+
+                    // Suppress smartwatches, health trackers, and peripherals from hijacking Aura with connection alerts
+                    if (isIgnoredBluetoothDevice(device, deviceName)) {
+                        return@runCatchingLogged
+                    }
+
+                    val address = runCatching { device?.address }.getOrNull()
+                    val now = System.currentTimeMillis()
+
+                    // Debounce: If this device is already active or reconnected within the debounce window,
+                    // do not auto-expand the Island to prevent repetitive popup loops.
+                    val isRecentReconnection = address != null &&
+                        address == lastBluetoothAddress &&
+                        lastBluetoothConnectedTime > 0L &&
+                        (now - lastBluetoothConnectedTime < BLUETOOTH_DEBOUNCE_MS)
+                    val autoExpand = !isRecentReconnection
+
+                    activeBluetoothAddress = address
+                    lastBluetoothAddress = address
+                    lastBluetoothConnectedTime = now
+
+                    var batteryLevel = intent.getIntExtra("android.bluetooth.device.extra.BATTERY_LEVEL", -1)
+                    if (batteryLevel !in 0..100) {
+                        batteryLevel = runCatching {
+                            val method = device?.javaClass?.getMethod("getBatteryLevel")
+                            (method?.invoke(device) as? Int) ?: -1
+                        }.getOrDefault(-1)
+                    }
+                    val statusText = if (batteryLevel in 0..100) {
+                        "Connected • $batteryLevel%"
+                    } else {
+                        "Connected"
+                    }
+                    notificationRepository.postNotification(
+                        IslandNotification(
+                            key = "system_bluetooth",
+                            packageName = "com.android.bluetooth",
+                            appName = "Bluetooth",
+                            title = deviceName,
+                            text = statusText,
+                            mode = IslandMode.Bluetooth,
+                            progress = if (batteryLevel in 0..100) batteryLevel else 0,
+                            progressMax = 100,
+                            timeMillis = System.currentTimeMillis()
+                        ),
+                        autoExpand = autoExpand
+                    )
+                }
+                "android.bluetooth.device.action.BATTERY_LEVEL_CHANGED" -> {
+                    val batteryLevel = intent.getIntExtra("android.bluetooth.device.extra.BATTERY_LEVEL", -1)
+                    if (batteryLevel in 0..100) {
+                        val existing = notificationRepository.notifications.value.find { it.key == "system_bluetooth" }
+                        if (existing != null) {
+                            notificationRepository.postNotification(
+                                existing.copy(
+                                    text = "Connected • $batteryLevel%",
+                                    progress = batteryLevel,
+                                    progressMax = 100
+                                ),
+                                autoExpand = false
+                            )
+                        }
+                    }
+                }
+                BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                    val disconnectedDevice = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    }
+                    val disconnectedAddress = runCatching { disconnectedDevice?.address }.getOrNull()
+
+                    // Only dismiss the Bluetooth notification if the device that disconnected
+                    // is our currently active Bluetooth device (or address could not be determined).
+                    // This avoids removing the notification when a smartwatch/peripheral disconnects
+                    // while audio earbuds are connected.
+                    if (activeBluetoothAddress == null || disconnectedAddress == null || disconnectedAddress == activeBluetoothAddress) {
+                        activeBluetoothAddress = null
+                        notificationRepository.removeNotification("system_bluetooth")
+                    }
+                }
+                Intent.ACTION_POWER_CONNECTED -> {
+                    if (!settingsProvider().enableBatteryMode) {
+                        notificationRepository.removeNotification("system_battery")
+                        return@runCatchingLogged
+                    }
+                    isCurrentlyCharging = true
+                    val settings = settingsProvider()
+                    val effectiveDevice = com.moksha.auraisland.util.OemDeviceRules.resolveEffectiveDevice(settings.deviceType)
+                    val hasNativeIsland = settings.yieldToSystemIsland && com.moksha.auraisland.util.OemDeviceRules.hasNativeSystemIsland(effectiveDevice)
+
+                    nativeChargingYieldJob?.cancel()
+                    if (hasNativeIsland) {
+                        // Native dynamic island (Origin Island, Fluid Cloud, Mini Capsule) shows a transient charging popup for ~3.5s.
+                        // Instantly hide Aura Island so the native island popup has full unobstructed visibility!
+                        notificationRepository.setNativeIslandActive(true)
+                        nativeChargingYieldJob = coroutineScope.launch {
+                            kotlinx.coroutines.delay(NATIVE_CHARGING_POPUP_DURATION_MS)
+                            notificationRepository.setNativeIslandActive(false)
+                            if (isCurrentlyCharging) {
+                                updateBatteryIsland(context, intent, autoExpand = true)
+                            }
+                        }
+                    } else {
+                        updateBatteryIsland(context, intent, autoExpand = true)
+                    }
+                }
+                Intent.ACTION_POWER_DISCONNECTED -> {
+                    nativeChargingYieldJob?.cancel()
+                    nativeChargingYieldJob = null
+                    batteryDismissJob?.cancel()
+                    batteryDismissJob = null
+                    notificationRepository.setNativeIslandActive(false)
+                    notificationRepository.removeNotification("system_battery")
+                    if (!settingsProvider().enableBatteryMode) {
+                        return@runCatchingLogged
+                    }
+                    isCurrentlyCharging = false
+                    updateBatteryState(context, intent, autoExpand = false)
+                }
+                Intent.ACTION_BATTERY_LOW -> {
+                    if (!settingsProvider().enableBatteryMode) {
+                        notificationRepository.removeNotification("system_battery")
+                        return@runCatchingLogged
+                    }
+                    updateBatteryState(context, intent, autoExpand = true)
+                }
+                Intent.ACTION_BATTERY_OKAY -> {
+                    if (!settingsProvider().enableBatteryMode) {
+                        notificationRepository.removeNotification("system_battery")
+                        return@runCatchingLogged
+                    }
+                    updateBatteryState(context, intent, autoExpand = false)
+                }
+                PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
+                    if (!settingsProvider().enableBatteryMode) {
+                        notificationRepository.removeNotification("system_battery")
+                        return@runCatchingLogged
+                    }
+                    val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                    val isPowerSave = powerManager?.isPowerSaveMode == true
+                    updateBatteryState(context, intent, autoExpand = isPowerSave)
+                }
+                Intent.ACTION_BATTERY_CHANGED -> {
+                    if (!settingsProvider().enableBatteryMode) {
+                        notificationRepository.removeNotification("system_battery")
+                        return@runCatchingLogged
+                    }
+                    val charging = isCharging(intent)
+                    if (charging != isCurrentlyCharging) {
+                        isCurrentlyCharging = charging
+                        val settings = settingsProvider()
+                        val effectiveDevice = com.moksha.auraisland.util.OemDeviceRules.resolveEffectiveDevice(settings.deviceType)
+                        val hasNativeIsland = settings.yieldToSystemIsland && com.moksha.auraisland.util.OemDeviceRules.hasNativeSystemIsland(effectiveDevice)
+
+                        nativeChargingYieldJob?.cancel()
+                        if (charging) {
+                            if (hasNativeIsland) {
+                                notificationRepository.setNativeIslandActive(true)
+                                nativeChargingYieldJob = coroutineScope.launch {
+                                    kotlinx.coroutines.delay(NATIVE_CHARGING_POPUP_DURATION_MS)
+                                    notificationRepository.setNativeIslandActive(false)
+                                    if (isCurrentlyCharging) {
+                                        updateBatteryIsland(context, intent, autoExpand = true)
+                                    }
+                                }
+                            } else {
+                                updateBatteryIsland(context, intent, autoExpand = true)
+                            }
+                        } else {
+                            nativeChargingYieldJob = null
+                            notificationRepository.setNativeIslandActive(false)
+                            updateBatteryState(context, intent, autoExpand = false)
+                        }
+                    } else if (charging) {
+                        if (nativeChargingYieldJob?.isActive != true) {
+                            updateBatteryIsland(context, intent, autoExpand = false)
+                        }
+                    } else {
+                        updateBatteryState(context, intent, autoExpand = false)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun isCharging(intent: Intent): Boolean {
+        val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+        return status == BatteryManager.BATTERY_STATUS_CHARGING ||
+               status == BatteryManager.BATTERY_STATUS_FULL
+    }
+
+    private fun getBatteryIntent(context: Context, batteryIntent: Intent?): Intent? {
+        return batteryIntent?.takeIf { it.hasExtra(BatteryManager.EXTRA_LEVEL) } ?: runCatchingLogged("SystemEventReceiver", "registerReceiver BATTERY_CHANGED failed") {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED), Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            }
+        }
+    }
+
+    private fun updateBatteryState(context: Context, intent: Intent?, autoExpand: Boolean) {
+        val intentToUse = getBatteryIntent(context, intent)
+        val level = intentToUse?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: 0
+        val scale = intentToUse?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: 100
+        val batteryPct = if (scale > 0 && level >= 0) (level * 100 / scale.toFloat()).toInt().coerceIn(0, 100) else 20
+
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val isPowerSave = powerManager?.isPowerSaveMode == true
+        val isLowBattery = batteryPct <= 20 || intent?.action == Intent.ACTION_BATTERY_LOW
+
+        if (isCurrentlyCharging) {
+            updateBatteryIsland(context, intentToUse, autoExpand)
+            return
+        }
+
+        if (isPowerSave) {
+            val title = "Battery Saver ON"
+            if (!autoExpand && batteryPct == lastBatteryPct && title == lastBatteryTitle) return
+            lastBatteryPct = batteryPct
+            lastBatteryTitle = title
+
+            notificationRepository.postNotification(
+                IslandNotification(
+                    key = "system_battery",
+                    packageName = "com.android.systemui",
+                    appName = "System",
+                    title = title,
+                    text = "$batteryPct%",
+                    category = "battery_saver",
+                    mode = IslandMode.Battery,
+                    timeMillis = System.currentTimeMillis()
+                ),
+                autoExpand = autoExpand
+            )
+        } else if (isLowBattery) {
+            val title = "Low Battery"
+            if (!autoExpand && batteryPct == lastBatteryPct && title == lastBatteryTitle) return
+            lastBatteryPct = batteryPct
+            lastBatteryTitle = title
+
+            notificationRepository.postNotification(
+                IslandNotification(
+                    key = "system_battery",
+                    packageName = "com.android.systemui",
+                    appName = "System",
+                    title = title,
+                    text = "$batteryPct%",
+                    category = "battery_low",
+                    mode = IslandMode.Battery,
+                    timeMillis = System.currentTimeMillis()
+                ),
+                autoExpand = autoExpand
+            )
+        } else {
+            lastBatteryPct = -1
+            lastBatteryTitle = null
+            notificationRepository.removeNotification("system_battery")
+        }
+    }
+
+    private fun updateBatteryIsland(context: Context, batteryIntent: Intent?, autoExpand: Boolean) {
+        val intentToUse = getBatteryIntent(context, batteryIntent)
+        val level = intentToUse?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: 0
+        val scale = intentToUse?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: 100
+        if (level < 0 || scale <= 0) return
+        val batteryPct = (level * 100 / scale.toFloat()).toInt().coerceIn(0, 100)
+        val status = intentToUse?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+
+        val title = when (status) {
+            BatteryManager.BATTERY_STATUS_FULL -> "Fully Charged"
+            else -> "Charging"
+        }
+
+        // Skip redundant posts when both the percentage and title haven't changed.
+        if (!autoExpand && batteryPct == lastBatteryPct && title == lastBatteryTitle) return
+        lastBatteryPct = batteryPct
+        val settings = settingsProvider()
+        val shouldAutoExpand = if (settings.enableCutoutRingMode || settings.enableBatteryRing) false else autoExpand
+
+        notificationRepository.postNotification(
+            IslandNotification(
+                key = "system_battery",
+                packageName = "com.android.systemui",
+                appName = "System",
+                title = title,
+                text = "$batteryPct%",
+                category = "battery_charging",
+                mode = IslandMode.Battery,
+                icon = null,
+                timeMillis = System.currentTimeMillis()
+            ),
+            autoExpand = shouldAutoExpand
+        )
+
+        batteryDismissJob?.cancel()
+        batteryDismissJob = coroutineScope.launch {
+            kotlinx.coroutines.delay(4000)
+            notificationRepository.removeNotification("system_battery")
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun isIgnoredBluetoothDevice(device: BluetoothDevice?, deviceName: String): Boolean {
+        if (device == null) return false
+
+        val bluetoothClass = try {
+            device.bluetoothClass
+        } catch (e: SecurityException) {
+            null
+        } catch (e: Exception) {
+            null
+        }
+        val majorClass = bluetoothClass?.majorDeviceClass
+        val deviceClass = bluetoothClass?.deviceClass
+
+        // 1. Explicitly allow Audio/Video devices (earbuds, headphones, car audio, speakers, headsets)
+        if (majorClass == BluetoothClass.Device.Major.AUDIO_VIDEO) {
+            return false
+        }
+
+        // 2. Filter out Wearables, Health sensors, and Peripherals (mice, keyboards, controllers)
+        if (majorClass == BluetoothClass.Device.Major.WEARABLE ||
+            majorClass == BluetoothClass.Device.Major.HEALTH ||
+            majorClass == BluetoothClass.Device.Major.PERIPHERAL
+        ) {
+            return true
+        }
+
+        if (deviceClass == BluetoothClass.Device.WEARABLE_WRIST_WATCH ||
+            deviceClass == BluetoothClass.Device.WEARABLE_PAGER ||
+            deviceClass == BluetoothClass.Device.WEARABLE_JACKET ||
+            deviceClass == BluetoothClass.Device.WEARABLE_HELMET ||
+            deviceClass == BluetoothClass.Device.WEARABLE_GLASSES
+        ) {
+            return true
+        }
+
+        // 3. Name-based heuristics for smartwatches, fitness bands, and trackers
+        val lowerName = deviceName.lowercase()
+        val wearableKeywords = listOf(
+            "watch", "smartwatch", "wear os", "fitbit", "garmin", "amazfit",
+            "whoop", "oura", "smart band", "smartband", "mi band", "miband",
+            "honor band", "huawei band", "galaxy fit", "band"
+        )
+        if (wearableKeywords.any { lowerName.contains(it) }) {
+            return true
+        }
+
+        // 4. Peripherals / HID keywords
+        val peripheralKeywords = listOf("mouse", "keyboard", "trackpad", "gamepad", "controller", "stylus", "s pen")
+        return peripheralKeywords.any { lowerName.contains(it) }
+    }
+}

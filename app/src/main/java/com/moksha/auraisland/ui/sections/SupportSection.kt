@@ -1,0 +1,109 @@
+/*
+ * Aura (2026)
+ * Author / Developer: Sensui-moksha
+ * https://github.com/Sensui-moksha
+ * Licensed under the GNU GPL v3 License
+ * Do not remove or alter this notice. - Per GPL-3.0 Section 4 & Section 5
+ */
+
+package com.moksha.auraisland.ui.sections
+
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.Feedback
+import androidx.compose.material.icons.rounded.Gavel
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.moksha.auraisland.R
+import com.moksha.auraisland.ui.components.ClickableRowItem
+import com.moksha.auraisland.util.runCatchingLogged
+
+@Composable
+fun SupportSection() {
+    val context = LocalContext.current
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = stringResource(R.string.support_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                ClickableRowItem(
+                    label = stringResource(R.string.request_feature),
+                    subtitle = stringResource(R.string.request_feature_desc),
+                    icon = Icons.Rounded.Feedback,
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_SENDTO).apply {
+                            data = Uri.parse("mailto:dev.auraisland@gmail.com")
+                            putExtra(Intent.EXTRA_SUBJECT, "Aura Feature Request")
+                        }
+                        runCatchingLogged("SupportSection", "Failed to open Feature Request mail") {
+                            context.startActivity(intent)
+                        } ?: Toast.makeText(context, "Cannot open email app", Toast.LENGTH_SHORT).show()
+                    }
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
+
+                ClickableRowItem(
+                    label = stringResource(R.string.report_bug),
+                    subtitle = stringResource(R.string.report_bug_desc),
+                    icon = Icons.Rounded.BugReport,
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_SENDTO).apply {
+                            data = Uri.parse("mailto:dev.auraisland@gmail.com")
+                            putExtra(Intent.EXTRA_SUBJECT, "Aura Bug Report")
+                        }
+                        runCatchingLogged("SupportSection", "Failed to open Bug Report mail") {
+                            context.startActivity(intent)
+                        } ?: Toast.makeText(context, "Cannot open email app", Toast.LENGTH_SHORT).show()
+                    }
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
+
+                ClickableRowItem(
+                    label = stringResource(R.string.license_title),
+                    subtitle = stringResource(R.string.license_desc),
+                    icon = Icons.Rounded.Gavel,
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.gnu.org/licenses/gpl-3.0.html"))
+                        runCatchingLogged("SupportSection", "Failed to open License link") {
+                            context.startActivity(intent)
+                        } ?: Toast.makeText(context, "Cannot open link", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
+        }
+    }
+}
